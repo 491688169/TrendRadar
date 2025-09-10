@@ -2289,6 +2289,8 @@ def split_content_into_batches(
         base_header = f"**总新闻数：** {total_titles}\n\n\n\n"
     elif format_type == "telegram":
         base_header = f"总新闻数： {total_titles}\n\n"
+    elif format_type == "dingtalk":
+        base_header = f"**总新闻数：** {total_titles}\n\n"
 
     base_footer = ""
     if format_type == "wework":
@@ -2299,6 +2301,10 @@ def split_content_into_batches(
         base_footer = f"\n\n更新时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
         if update_info:
             base_footer += f"\nTrendRadar 发现新版本 {update_info['remote_version']}，当前 {update_info['current_version']}"
+    elif format_type == "dingtalk":
+        base_footer = f"\n\n**时间：** {now.strftime('%Y-%m-%d %H:%M:%S')}"
+        if update_info:
+            base_footer += f"\n\n**版本更新：** TrendRadar 发现新版本 **{update_info['remote_version']}**，当前 **{update_info['current_version']}**"
 
     stats_header = ""
     if report_data["stats"]:
@@ -2306,6 +2312,8 @@ def split_content_into_batches(
             stats_header = f"📊 **热点词汇统计**\n\n"
         elif format_type == "telegram":
             stats_header = f"📊 热点词汇统计\n\n"
+        elif format_type == "dingtalk":
+            stats_header = f"📊 **热点词汇统计**\n\n"
 
     current_batch = base_header
     current_batch_has_content = False
@@ -2370,6 +2378,13 @@ def split_content_into_batches(
                     word_header = f"📈 {sequence_display} {word} : {count} 条\n\n"
                 else:
                     word_header = f"📌 {sequence_display} {word} : {count} 条\n\n"
+            elif format_type == "dingtalk":
+                if count >= 10:
+                    word_header = f"🔥 {sequence_display} **{word}** : **{count}** 条\n\n"
+                elif count >= 5:
+                    word_header = f"📈 {sequence_display} **{word}** : **{count}** 条\n\n"
+                else:
+                    word_header = f"📌 {sequence_display} **{word}** : {count} 条\n\n"
 
             # 构建第一条新闻
             first_news_line = ""
@@ -2382,6 +2397,10 @@ def split_content_into_batches(
                 elif format_type == "telegram":
                     formatted_title = format_title_for_platform(
                         "telegram", first_title_data, show_source=True
+                    )
+                elif format_type == "dingtalk":
+                    formatted_title = format_title_for_platform(
+                        "dingtalk", first_title_data, show_source=True
                     )
                 else:
                     formatted_title = f"{first_title_data['title']}"
@@ -2420,6 +2439,10 @@ def split_content_into_batches(
                     formatted_title = format_title_for_platform(
                         "telegram", title_data, show_source=True
                     )
+                elif format_type == "dingtalk":
+                    formatted_title = format_title_for_platform(
+                        "dingtalk", title_data, show_source=True
+                    )
                 else:
                     formatted_title = f"{title_data['title']}"
 
@@ -2447,6 +2470,8 @@ def split_content_into_batches(
                     separator = f"\n\n\n\n"
                 elif format_type == "telegram":
                     separator = f"\n\n"
+                elif format_type == "dingtalk":
+                    separator = f"\n\n"
 
                 test_content = current_batch + separator
                 if (
@@ -2464,6 +2489,8 @@ def split_content_into_batches(
             new_header = (
                 f"\n\n🆕 本次新增热点新闻 (共 {report_data['total_new_count']} 条)\n\n"
             )
+        elif format_type == "dingtalk":
+            new_header = f"\n\n🆕 **本次新增热点新闻** (共 {report_data['total_new_count']} 条)\n\n"
 
         test_content = current_batch + new_header
         if (
@@ -2485,6 +2512,8 @@ def split_content_into_batches(
                 source_header = f"**{source_data['source_name']}** ({len(source_data['titles'])} 条):\n\n"
             elif format_type == "telegram":
                 source_header = f"{source_data['source_name']} ({len(source_data['titles'])} 条):\n\n"
+            elif format_type == "dingtalk":
+                source_header = f"**{source_data['source_name']}** ({len(source_data['titles'])} 条):\n\n"
 
             # 构建第一条新增新闻
             first_news_line = ""
@@ -2500,6 +2529,10 @@ def split_content_into_batches(
                 elif format_type == "telegram":
                     formatted_title = format_title_for_platform(
                         "telegram", title_data_copy, show_source=False
+                    )
+                elif format_type == "dingtalk":
+                    formatted_title = format_title_for_platform(
+                        "dingtalk", title_data_copy, show_source=False
                     )
                 else:
                     formatted_title = f"{title_data_copy['title']}"
@@ -2537,6 +2570,10 @@ def split_content_into_batches(
                 elif format_type == "telegram":
                     formatted_title = format_title_for_platform(
                         "telegram", title_data_copy, show_source=False
+                    )
+                elif format_type == "dingtalk":
+                    formatted_title = format_title_for_platform(
+                        "dingtalk", title_data_copy, show_source=False
                     )
                 else:
                     formatted_title = f"{title_data_copy['title']}"
@@ -2735,41 +2772,107 @@ def send_to_dingtalk(
     proxy_url: Optional[str] = None,
     mode: str = "daily",
 ) -> bool:
-    """发送到钉钉"""
+    """发送到钉钉，支持分批发送"""
     headers = {"Content-Type": "application/json"}
 
+    # 钉钉的消息大小限制是20000字节，设置为18000字节留出安全余量
+    max_bytes = 18000
+    
+    # 首先尝试发送完整消息
     text_content = render_dingtalk_content(report_data, update_info, mode)
+    
+    if len(text_content.encode("utf-8")) <= max_bytes:
+        # 消息不超过限制，直接发送
+        payload = {
+            "msgtype": "markdown",
+            "markdown": {
+                "title": f"TrendRadar 热点分析报告 - {report_type}",
+                "text": text_content,
+            },
+        }
+        
+        proxies = None
+        if proxy_url:
+            proxies = {"http": proxy_url, "https": proxy_url}
 
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {
-            "title": f"TrendRadar 热点分析报告 - {report_type}",
-            "text": text_content,
-        },
-    }
-
-    proxies = None
-    if proxy_url:
-        proxies = {"http": proxy_url, "https": proxy_url}
-
-    try:
-        response = requests.post(
-            webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
-        )
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("errcode") == 0:
-                print(f"钉钉通知发送成功 [{report_type}]")
-                return True
+        try:
+            response = requests.post(
+                webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("errcode") == 0:
+                    print(f"钉钉通知发送成功 [{report_type}]")
+                    return True
+                else:
+                    print(f"钉钉通知发送失败 [{report_type}]，错误：{result.get('errmsg')}")
+                    return False
             else:
-                print(f"钉钉通知发送失败 [{report_type}]，错误：{result.get('errmsg')}")
+                print(f"钉钉通知发送失败 [{report_type}]，状态码：{response.status_code}")
                 return False
-        else:
-            print(f"钉钉通知发送失败 [{report_type}]，状态码：{response.status_code}")
+        except Exception as e:
+            print(f"钉钉通知发送出错 [{report_type}]：{e}")
             return False
-    except Exception as e:
-        print(f"钉钉通知发送出错 [{report_type}]：{e}")
-        return False
+    else:
+        # 消息超过限制，分批发送
+        print(f"钉钉消息内容过大({len(text_content.encode('utf-8'))}字节)，开始分批发送...")
+        
+        # 生成分批内容
+        batch_contents = split_content_into_batches(
+            report_data, "dingtalk", update_info, max_bytes, mode
+        )
+        
+        if not batch_contents:
+            print(f"钉钉分批处理失败 [{report_type}]")
+            return False
+        
+        proxies = None
+        if proxy_url:
+            proxies = {"http": proxy_url, "https": proxy_url}
+        
+        successful_batches = 0
+        total_batches = len(batch_contents)
+        
+        for i, batch_content in enumerate(batch_contents, 1):
+            try:
+                payload = {
+                    "msgtype": "markdown",
+                    "markdown": {
+                        "title": f"TrendRadar 热点分析报告 - {report_type} (第{i}/{total_batches}批)",
+                        "text": batch_content,
+                    },
+                }
+                
+                response = requests.post(
+                    webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("errcode") == 0:
+                        print(f"钉钉通知发送成功 [{report_type}] 第{i}/{total_batches}批")
+                        successful_batches += 1
+                    else:
+                        print(f"钉钉通知发送失败 [{report_type}] 第{i}/{total_batches}批，错误：{result.get('errmsg')}")
+                else:
+                    print(f"钉钉通知发送失败 [{report_type}] 第{i}/{total_batches}批，状态码：{response.status_code}")
+                
+                # 批次间延迟
+                if i < total_batches:
+                    time.sleep(CONFIG["BATCH_SEND_INTERVAL"])
+                    
+            except Exception as e:
+                print(f"钉钉通知发送出错 [{report_type}] 第{i}/{total_batches}批：{e}")
+        
+        if successful_batches == total_batches:
+            print(f"钉钉通知全部发送成功 [{report_type}]，共{total_batches}批")
+            return True
+        elif successful_batches > 0:
+            print(f"钉钉通知部分发送成功 [{report_type}]，{successful_batches}/{total_batches}批")
+            return True
+        else:
+            print(f"钉钉通知发送失败 [{report_type}]，所有批次都失败")
+            return False
 
 
 def send_to_wework(
